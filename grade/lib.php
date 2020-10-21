@@ -2805,6 +2805,226 @@ class grade_tree extends grade_structure {
             return false;
         }
     }
+
+    /**
+     * Method to determine if the $eid (grade tree element) is used in any calculations
+     *
+     * @param String $eid The grade tree element id.  'gi' + numeric
+     *
+     * @access Public
+     * @return Array $used Returns an array of items where the grade tree element is used in a calculation.
+     */
+    public function calculate_use ($eid) {
+        $calcs = $this->_used_in_calculations ($eid);
+        $used = [];
+        if (!empty ($calcs) && is_array ($calcs)) {
+            foreach ($calcs as $_eid => $id) {
+                $element = $this->locate_element($_eid);
+                $url = new moodle_url ('/grade/edit/tree/calculation.php', ['courseid' => $this->courseid, 'id' => $id, 
+                    'gpr_type' => 'edit', 'gpr_plugin' => 'tree', 'gpr_courseid' => $this->courseid]);
+                $icon = new action_menu_link_secondary($url, new pix_icon('t/edit', get_string('edit')), get_string('edit'));
+                $link = html_writer::link($url, $element['object']->get_name(true).$icon->get_icon_html());
+                $temp = new stdClass ();
+                $temp->name = $element['object']->get_name(true);
+                $temp->link = $link;
+                $used[$id] = $temp;
+            }
+        }
+        return $used;
+    }
+
+    /**
+     * Method to determine if there are missing grade items in any/all of the calculations.
+     *
+     * @access Public
+     * @return Array $missing Returns an array of grade categories that have missing grade items (deleted)
+     */
+    public function calculate_missing_grade_items () {
+        $missing = [];
+        $calcs = $this->_get_calculations ();
+        if (!empty($calcs)) {
+            foreach ($calcs as $id => $item) {
+                $cat_object = $this->get_item ($id);
+                // category grade object has been removed
+                // unlikely case
+                if ($cat_object === false) {
+                    $missing[$id] = null;
+                }
+                foreach ($item['calc_items'] as $i => $k) {
+                    $grade_object = $this->get_item ($i);
+                    // check if grade object was found
+                    // if missing, it was deleted
+                    if ($grade_object === false) {
+                        // get the name of the category
+                        $temp = new stdClass ();
+                        $temp->name = $cat_object->get_name (true);
+                        $missing[$id] = $temp;
+                    }
+                }
+            }
+            if (!empty($missing)) {
+                foreach ($missing as $id => &$object) {
+                    if (!is_null($object)) {
+                        $url = new moodle_url ('/grade/edit/tree/calculation.php', ['courseid' => $this->courseid, 
+                            'id' => $id, 'gpr_type' => 'edit', 'gpr_plugin' => 'tree', 'gpr_courseid' => $this->courseid]);
+                        $icon = new action_menu_link_secondary($url, new pix_icon('t/edit', get_string('edit')), get_string('edit'));
+                        $object->link = html_writer::link($url, $object->name .$icon->get_icon_html());
+                    }
+                }
+            }
+        }
+        return $missing;
+    }
+
+    /**
+     * Method to determine if a particular $eid is used in a calculation
+     *
+     * @param String The grade tree element id.  'gi' + numeric
+     *
+     * @access Private
+     * @return Array Returns an array of items (items that contain calculations) where $eid is in use.
+     */
+    private function _used_in_calculations ($eid = null) {
+        $calculations = [];
+        if (empty($eid) || !preg_match('/ig\d+/', $eid)) {
+            return $calculations;
+        }
+        $id = str_ireplace('ig', '', $eid);
+        $calculation = $this->_get_calculations ();
+        if (!empty($calculation)) {
+            foreach ($calculation as $key => $item) {
+                if (array_key_exists ($id, $item['calc_items'])) {
+                    $calculations['ig'.$key] = $key;
+                }
+            }
+        }
+        return $calculations;
+    }
+
+    /**
+     * Method to get all calculation used in the gradebook
+     *
+     * @access Private
+     * @return Array Returns an array of all the calculations if any are used
+     */
+    private function _get_calculations () {
+        $levels = array_reverse ($this->get_levels(), true);
+        $calculations = [];
+        foreach ($levels as $items) {
+            $this->_get_all_calculations ($items, $calculations);
+        }
+        return $calculations;
+    }
+
+    /**  
+     * Method to figure out what grade items are in a calculation
+     *
+     * @param String $calculation The string representation of a gradebook calculation
+     *
+     * @access Private
+     * @return Array An array of the Item id's as keys that point to null
+     */
+    private function _extract_calculation_ids ($calculation) {
+        $useditems = [];
+        if (preg_match_all('/##gi(\d+)##/', $calculation, $matches)) {
+            $useditems = array_unique($matches[1]);
+        }
+        return array_fill_keys ($useditems, null);
+    } 
+
+    /**
+     * Helper function for retrieving the "object" from a given element
+     *
+     * @param  array  $element  a gtree "element"
+     * @param  array  $types  a list of types of element children to be included (item|courseitem|category|categoryitem)
+     * @param  boolean  $itemsOnly  if true, will add only children "grade_item" object to results
+     * @return array  child object id => object
+     */
+    private function _getelementchildren($element, $types = array(), $itemsonly = true) {
+        if (!array_key_exists('children', $element)) {
+            return false;
+        }
+
+        $elementchildren = $element['children'];
+
+
+        $results = [];
+
+        // Iterate through all children.
+        foreach ($elementchildren as $key => $child) {
+            // Add each wanted type to results array as: object id => object.
+            if (in_array($child['type'], $types)) {
+                $childobject = $child['object'];
+                if ($child['type'] == 'category' and $itemsonly) {
+                    // Get this category's grade_item.
+                    $gradeitem = $this->_getgradeitemfromcategory($childobject);
+
+                    $results[$gradeitem->id] = $gradeitem;
+                } else {
+                    $results[$childobject->id] = $childobject;
+                }
+            }
+        }
+        return $results;
+    }
+
+    /**
+     * Returns a given grade_category's grade_item object of a specified type
+     *
+     * @param  grade_category  $gradeCategory
+     * @param  string  $itemType  category|course
+     * @return grade_item
+     */
+    private function _getgradeitemfromcategory($gradecategory, $itemtype = 'category') {
+        $gradeitem = grade_item::fetch([
+            'itemtype' => $itemtype,
+            'iteminstance' => $gradecategory->id,
+        ]);
+
+        if (!$gradeitem or ! property_exists($gradeitem, 'id')) {
+            return false;
+        }
+
+        return $gradeitem;
+    }
+
+    /**  
+     * Recursive method to get all calculations formulas and attempt to 
+     * calculate values.
+     *
+     * @param Array $levels
+     * @param Array $calculations
+     *
+     * @return Array $calculations
+     * @access Private
+     */
+    private function _get_all_calculations ($levels, &$calculations = []) {
+        if (empty($levels)) {
+            return $calculations;
+        }
+        $temp = array_shift($levels);
+        if ($temp['type'] != 'category') {
+            if (!empty($temp['object']->calculation)) {
+                $used = $this->_extract_calculation_ids ($temp['object']->calculation);
+                $calculations[$temp['object']->id]['calculation'] = $temp['object']->calculation;
+                $calculations[$temp['object']->id]['calc_items'] = $used;
+            }
+            return $this->_get_all_calculations ($levels, $calculations);
+        }
+     
+        $element = $this->locate_element ($temp['eid']);
+        $category = !array_key_exists ('object', $element) ? false : $element['object'];
+        $categorygradeitems = $this->_getelementchildren($element, ['item', 'category'], true);
+     
+        foreach ($categorygradeitems as $id => $item) {
+            if (!empty($item->calculation)) {
+                $used = $this->_extract_calculation_ids ($item->calculation);
+                $calculations[$id]['calculation'] = $item->calculation;
+                $calculations[$id]['calc_items'] = $used;
+            }
+        }
+        return $this->_get_all_calculations ($levels, $calculations);
+    }
 }
 
 /**

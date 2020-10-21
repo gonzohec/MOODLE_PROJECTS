@@ -111,15 +111,28 @@ switch ($action) {
                 redirect($returnurl);
 
             } else {
+                
+                $grade_items_used = $gtree->calculate_use ($eid);
+
                 $PAGE->set_title($strgrades . ': ' . $strgraderreport);
                 $PAGE->set_heading($course->fullname);
                 echo $OUTPUT->header();
-                $strdeletecheckfull = get_string('deletecheck', '', $object->get_name());
-                $optionsyes = array('eid'=>$eid, 'confirm'=>1, 'sesskey'=>sesskey(), 'id'=>$course->id, 'action'=>'delete');
-                $optionsno  = array('id'=>$course->id);
-                $formcontinue = new single_button(new moodle_url('index.php', $optionsyes), get_string('yes'));
-                $formcancel = new single_button(new moodle_url('index.php', $optionsno), get_string('no'), 'get');
-                echo $OUTPUT->confirm($strdeletecheckfull, $formcontinue, $formcancel);
+                
+                if (!empty($grade_items_used)) {
+                    $strdeletecheckfull = get_string('calculationdependency', 'grades') . $object->get_name().'.<br>';
+                    foreach ($grade_items_used as $obj) {
+                        $strdeletecheckfull .= $obj->link . '<br>';
+                    }
+                    $strdeletecheckfull .= get_string('calculationremovedependency', 'grades') . $object->get_name();
+
+                } else {
+                    $strdeletecheckfull = get_string('deletecheck', '', $object->get_name());
+                }
+                $optionscontinue = array('eid'=>$eid, 'confirm'=>1, 'sesskey'=>sesskey(), 'id'=>$course->id, 'action'=>'delete');
+                $optionscancel  = array('id'=>$course->id);
+                $formcontinue = new single_button(new moodle_url('index.php', $optionscontinue), get_string('continue'));
+                $formcancel = new single_button(new moodle_url('index.php', $optionscancel), get_string('cancel'), 'get');
+                echo $OUTPUT->confirm($strdeletecheckfull, $formcancel, $formcontinue);
                 echo $OUTPUT->footer();
                 die;
             }
@@ -128,6 +141,72 @@ switch ($action) {
 
     case 'autosort':
         //TODO: implement autosorting based on order of mods on course page, categories first, manual items last
+        break;
+
+    case 'bulkdelete':
+        if (confirm_sesskey()) {
+            $confirm = optional_param('confirm', 0, PARAM_BOOL);
+            if ($confirm) {
+                $data = data_submitted();
+                $elements = array();
+                foreach ($data as $key => $value) {
+                    if (preg_match('/(ig\d+)/', $key, $matches)) {
+                        $eid = $matches[1];
+                        $element = $gtree->locate_element($eid);
+                        if($grade_edit_tree->element_deletable($element)) {
+                            $object = $element['object'];
+                            $object->delete('grade/report/grader/category');
+                        }
+                    }
+                }
+                redirect($returnurl);
+            } else {
+                $data = data_submitted();
+                $deleted_elements = [];
+                $formdata = [];
+                foreach ($data as $key => $value) {
+                    if (preg_match ('/select_(ig\d+)/', $key, $matches)) {
+                        $deleted_elements[$matches[1]] = $gtree->locate_element($matches[1]);
+                        $formdata[$matches[1]] = $matches[1];
+                    }
+                }
+
+                if (!empty($deleted_elements)) {
+                    $str_message = '';
+                    $str_deleted = '';
+                    $str_dependencies = '';
+                    foreach ($deleted_elements as $_eid => $del_obj) {
+                        $grade_items_used = $gtree->calculate_use ($_eid);
+                        $str_deleted .= $del_obj['object']->get_name() .'<br>';
+                        if (!empty($grade_items_used)) {
+                            foreach ($grade_items_used as $k => $gi_obj) {
+                                $str_dependencies .= $gi_obj->link . ' -> ' .$del_obj['object']->get_name().'<br>';
+                            }
+                        }
+                    }
+                    if (!empty($str_dependencies)) {
+                        $str_message .= get_string('calculationbulkdependencies', 'grades') . $str_dependencies;
+                    } 
+                    if (!empty($str_deleted)) {
+                        $str_message .= get_string('gradeitembulkdelete', 'grades') . $str_deleted;
+                    }
+                } else {
+                    $str_message = get_string('nogradeitemsselected', 'grades');
+                }
+
+                $optionscontinue = array_merge(array('eid'=>$eid, 'confirm'=>1, 'sesskey'=>sesskey(), 'id'=>$course->id, 'action'=>'bulkdelete'), $formdata);
+                $optionscancel  = array('id'=>$course->id);
+                $formcontinue = new single_button(new moodle_url('index.php', $optionscontinue), get_string('continue'));
+                $formcancel = new single_button(new moodle_url('index.php', $optionscancel), get_string('cancel'), 'get');
+
+                $PAGE->set_title($strgrades . ': ' . $strgraderreport);
+                $PAGE->set_heading($course->fullname);
+                echo $OUTPUT->header();
+                echo $OUTPUT->confirm($str_message, $formcancel, $formcontinue);
+                echo $OUTPUT->footer();
+                die;
+            }
+        }
         break;
 
     case 'move':
@@ -246,6 +325,22 @@ if (grade_regrade_final_grades_if_required($course, $grade_edit_tree_index_check
 }
 
 print_grade_page_head($courseid, 'settings', 'setup', get_string('gradebooksetup', 'grades'));
+
+// checking to see if there are missing grade items in a calculation
+$missing = $gtree->calculate_missing_grade_items ();
+if (!empty ($missing)) {
+    $links = '';
+    foreach ($missing as $i => $object) {
+        if (is_object ($object)) {
+            $links .= $object->link.'<br>';
+        }
+    }
+    $message = get_string('calculationserror', 'grades');
+    if (!empty ($links)) {
+        $message = get_string('calculationsmissinggradeitems', 'grades') . $links;
+    }
+    \core\notification::add($message, 'error');
+}
 
 // Print Table of categories and items
 echo $OUTPUT->box_start('gradetreebox generalbox');

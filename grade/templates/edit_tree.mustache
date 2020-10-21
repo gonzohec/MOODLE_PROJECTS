@@ -53,6 +53,9 @@
             {{#showsave}}
                 <input class="advanced btn btn-primary" type="submit" value={{#quote}}{{#str}}savechanges{{/str}}{{/quote}}>
             {{/showsave}}
+            <div style="float:right">
+                <button class="advanced btn btn-primary" name="action" id="deleteall" value="bulkdelete">{{#str}}deleteselected, grades{{/str}}</button>
+            </div>
             {{#showbulkmove}}
                 <div class="form-inline mt-3">
                     <input type="hidden" name="bulkmove" value="0" id="bulkmoveinput">
